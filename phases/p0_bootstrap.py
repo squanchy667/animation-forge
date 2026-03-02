@@ -75,10 +75,17 @@ def _print_env_status() -> dict[str, bool]:
         ("anthropic SDK", has_anthropic, "available + API key set" if has_anthropic else "not configured (optional)"),
     ]
 
+    from rich.text import Text
+
     for name, ok, detail in checks:
         icon = "[green]✓[/green]" if ok else "[yellow]○[/yellow]"
-        style = "dim" if not ok else ""
-        console.print(f"  {icon} [{style}]{name}: {detail}[/{style}]")
+        # Build line safely — detail may contain brackets that break Rich markup
+        line = Text("  ")
+        line.append_text(Text.from_markup(icon))
+        line.append(" ")
+        label = f"{name}: {detail}"
+        line.append(label, style="dim" if not ok else "")
+        console.print(line)
 
     if ffmpeg_version is None:
         console.print("\n  [bold red]Error:[/bold red] ffmpeg is required. Install it:")
