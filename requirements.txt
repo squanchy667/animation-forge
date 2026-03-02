@@ -1,0 +1,12 @@
+# Animation Forge — Python dependencies
+# System dependency: ffmpeg/ffprobe (not installable via pip)
+
+Pillow>=10.0
+numpy>=1.24
+scipy>=1.10
+rembg[cpu]>=2.0
+onnxruntime>=1.15
+mediapipe>=0.10
+anthropic>=0.25
+click>=8.1
+rich>=13.0

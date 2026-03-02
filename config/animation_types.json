@@ -1,0 +1,100 @@
+[
+  {
+    "id": "idle",
+    "category": "locomotion",
+    "loop": true,
+    "typical_frames": [12, 24],
+    "description": "Standing still, breathing animation"
+  },
+  {
+    "id": "walk",
+    "category": "locomotion",
+    "loop": true,
+    "typical_frames": [8, 16],
+    "description": "Walking forward cycle"
+  },
+  {
+    "id": "run",
+    "category": "locomotion",
+    "loop": true,
+    "typical_frames": [6, 12],
+    "description": "Running forward cycle"
+  },
+  {
+    "id": "jump",
+    "category": "locomotion",
+    "loop": false,
+    "typical_frames": [4, 8],
+    "description": "Jump launch from ground"
+  },
+  {
+    "id": "apex",
+    "category": "locomotion",
+    "loop": false,
+    "typical_frames": [2, 6],
+    "description": "Top of jump arc, hang time"
+  },
+  {
+    "id": "fall",
+    "category": "locomotion",
+    "loop": true,
+    "typical_frames": [4, 8],
+    "description": "Falling downward after apex"
+  },
+  {
+    "id": "land",
+    "category": "locomotion",
+    "loop": false,
+    "typical_frames": [3, 6],
+    "description": "Landing impact and recovery"
+  },
+  {
+    "id": "attack_1",
+    "category": "combat",
+    "loop": false,
+    "typical_frames": [6, 14],
+    "description": "Primary attack — light slash or punch"
+  },
+  {
+    "id": "attack_2",
+    "category": "combat",
+    "loop": false,
+    "typical_frames": [8, 16],
+    "description": "Secondary attack — heavy or combo follow-up"
+  },
+  {
+    "id": "attack_3",
+    "category": "combat",
+    "loop": false,
+    "typical_frames": [10, 20],
+    "description": "Tertiary attack — finisher or special"
+  },
+  {
+    "id": "dash",
+    "category": "combat",
+    "loop": false,
+    "typical_frames": [4, 8],
+    "description": "Quick directional dodge or dash"
+  },
+  {
+    "id": "block",
+    "category": "combat",
+    "loop": false,
+    "typical_frames": [2, 6],
+    "description": "Defensive block or shield raise"
+  },
+  {
+    "id": "hurt",
+    "category": "reaction",
+    "loop": false,
+    "typical_frames": [4, 8],
+    "description": "Taking damage flinch"
+  },
+  {
+    "id": "death",
+    "category": "reaction",
+    "loop": false,
+    "typical_frames": [10, 24],
+    "description": "Death collapse animation"
+  }
+]

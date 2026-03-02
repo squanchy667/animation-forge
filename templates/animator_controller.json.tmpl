@@ -1,0 +1,22 @@
+{
+  "character_name": "{character_name}",
+  "animator_controller": "{character_name}_AnimatorController",
+  "parameters": [
+    {{"name": "Speed", "type": "Float", "default": 0.0}},
+    {{"name": "IsGrounded", "type": "Bool", "default": true}},
+    {{"name": "IsAttacking", "type": "Bool", "default": false}},
+    {{"name": "IsDead", "type": "Bool", "default": false}},
+    {{"name": "AttackIndex", "type": "Int", "default": 0}},
+    {{"name": "HurtTrigger", "type": "Trigger", "default": null}}
+  ],
+  "layers": [
+    {{
+      "name": "Base Layer",
+      "states": {states_json},
+      "transitions": {transitions_json},
+      "default_state": "idle"
+    }}
+  ],
+  "generated_by": "Animation Forge v{version}",
+  "generated_at": "{timestamp}"
+}
