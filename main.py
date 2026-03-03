@@ -14,18 +14,22 @@ from utils.session import load_session, mark_phase_complete, new_session, save_s
 
 console = Console()
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 PHASE_NAMES = [
+    "Game Profile Setup",
     "Bootstrap & Analysis",
     "Questionnaire",
     "Frame Extraction",
     "Background Removal",
     "Segmentation",
+    "Frame Analysis",
     "Export & Package",
 ]
 
-PHASE_IDS = ["p0", "p1", "p2", "p3", "p4", "p5"]
+PHASE_IDS = ["p_profile", "p0", "p1", "p2", "p3", "p4", "p_analyze", "p5"]
+
+TOTAL_PHASES = len(PHASE_NAMES)
 
 
 # ── UI Helpers ──────────────────────────────────────────────────────────────
@@ -62,13 +66,19 @@ def show_error(message: str, exception: BaseException | None = None) -> None:
 
 def show_completion_summary(session: dict, zip_path: str | None = None) -> None:
     """Display final completion summary box with output file paths and sizes."""
+    profile = session.get("game_profile", {})
     lines = [
         f"[bold green]Character:[/bold green] {session.get('character_name', 'unknown')}",
         f"[bold green]Animations:[/bold green] {len(session.get('animation_map', {}))}",
         f"[bold green]BG Method:[/bold green] {session.get('bg_removal_method', 'N/A')}",
+    ]
+    if profile:
+        lines.append(f"[bold green]Game Type:[/bold green] {profile.get('game_type', 'N/A')}")
+        lines.append(f"[bold green]Export Target:[/bold green] {profile.get('export_target', 'N/A')}")
+    lines.extend([
         f"[bold green]Output:[/bold green] {session.get('output_dir', 'N/A')}",
         f"[bold green]Phases:[/bold green] {', '.join(session.get('phases_completed', []))}",
-    ]
+    ])
     if zip_path:
         zip_size = Path(zip_path).stat().st_size / (1024 * 1024)
         lines.append(f"[bold green]Package:[/bold green] {zip_path} ({zip_size:.2f} MB)")
@@ -105,10 +115,10 @@ def _run_phase(phase_num: int, session: dict, session_path: Path, **kwargs) -> d
     """Run a single phase with error handling and retry.
 
     Args:
-        phase_num: 1-indexed phase number.
+        phase_num: 1-indexed phase number (1-8).
         session: Session config dict.
         session_path: Path to session_config.json for saving.
-        **kwargs: Extra args (video_paths, skip_questionnaire).
+        **kwargs: Extra args (video_paths, skip_questionnaire, skip_analysis).
 
     Returns:
         Updated session dict.
@@ -120,35 +130,48 @@ def _run_phase(phase_num: int, session: dict, session_path: Path, **kwargs) -> d
         console.print(f"\n[dim]Phase {phase_num} ({phase_name}) — already complete, skipping[/dim]")
         return session
 
-    console.print(f"\n[bold cyan]── Phase {phase_num}/6: {phase_name} ──[/bold cyan]")
+    console.print(f"\n[bold cyan]── Phase {phase_num}/{TOTAL_PHASES}: {phase_name} ──[/bold cyan]")
 
     while True:
         try:
             if phase_num == 1:
+                # Game Profile Setup
+                from phases.p_profile import run_profile_setup
+                session = run_profile_setup(session)
+
+            elif phase_num == 2:
                 from phases.p0_bootstrap import run_bootstrap
                 session = run_bootstrap(session, kwargs.get("video_paths", []))
 
-            elif phase_num == 2:
+            elif phase_num == 3:
                 if kwargs.get("skip_questionnaire"):
                     console.print("  [dim]Skipping questionnaire (--skip-questionnaire)[/dim]")
                 else:
                     from phases.p1_questionnaire import run_questionnaire
                     session = run_questionnaire(session)
 
-            elif phase_num == 3:
+            elif phase_num == 4:
                 from phases.p2_extract import run_extraction
                 session = run_extraction(session)
 
-            elif phase_num == 4:
+            elif phase_num == 5:
                 from phases.p3_bg_removal import remove_backgrounds
                 session = remove_backgrounds(session)
 
-            elif phase_num == 5:
+            elif phase_num == 6:
                 from phases.p4_segmentation import segment_animations
                 segments = segment_animations(session)
                 session["segments"] = {k: v for k, v in segments.items()}
 
-            elif phase_num == 6:
+            elif phase_num == 7:
+                # Frame Analysis
+                if kwargs.get("skip_analysis"):
+                    console.print("  [dim]Skipping analysis (--skip-analysis)[/dim]")
+                else:
+                    from phases.p_analyzer import run_frame_analysis
+                    session = run_frame_analysis(session)
+
+            elif phase_num == 8:
                 from phases.p5_export import assemble_output_package, pack_all_spritesheets
                 spritesheets = pack_all_spritesheets(session)
                 session["spritesheets"] = {
@@ -181,8 +204,10 @@ def run_pipeline(
     phases: str | None,
     skip_questionnaire: bool,
     fps: int | None = None,
+    profile_path: str | None = None,
+    skip_analysis: bool = False,
 ) -> None:
-    """Orchestrate the full pipeline: P0 → P1 → P2 → P3 → P4 → P5."""
+    """Orchestrate the full 8-phase pipeline."""
     show_banner()
 
     # Create output directory and session
@@ -194,6 +219,14 @@ def run_pipeline(
     # Set extraction FPS override if provided
     if fps:
         session["extract_fps"] = fps
+
+    # Load profile from file if provided (skips profile questionnaire)
+    if profile_path:
+        from utils.game_profile import load_profile_from_path, save_profile
+        profile = load_profile_from_path(profile_path)
+        session["game_profile"] = profile
+        save_profile(profile, output_dir / "game_profile.json")
+        console.print(f"[dim]Profile loaded from:[/dim] {profile_path}")
 
     # Pre-populate videos in session
     for v in videos:
@@ -209,7 +242,14 @@ def run_pipeline(
 
     selected_phases = _parse_phases(phases)
 
-    for phase_num in range(1, 7):
+    for phase_num in range(1, TOTAL_PHASES + 1):
+        # Skip profile phase if profile was provided via CLI
+        if phase_num == 1 and profile_path:
+            session = mark_phase_complete(session, "p_profile")
+            save_session(session, session_path)
+            console.print(f"\n[dim]Phase 1 (Game Profile Setup) — loaded from file, skipping[/dim]")
+            continue
+
         if selected_phases and phase_num not in selected_phases:
             console.print(f"\n[dim]Phase {phase_num} ({PHASE_NAMES[phase_num - 1]}) — skipped (--phases)[/dim]")
             continue
@@ -220,17 +260,26 @@ def run_pipeline(
             session_path,
             video_paths=[str(Path(v).resolve()) for v in videos],
             skip_questionnaire=skip_questionnaire,
+            skip_analysis=skip_analysis,
         )
 
     show_completion_summary(session, session.get("zip_path"))
 
 
-def resume_pipeline(session_path: Path) -> None:
+def resume_pipeline(session_path: Path, skip_analysis: bool = False) -> None:
     """Resume pipeline from a saved session file."""
     show_banner()
 
     session = load_session(session_path)
     session_path = Path(session_path).resolve()
+
+    # Backward compat: old sessions without game_profile/analysis_results
+    if "game_profile" not in session:
+        session["game_profile"] = {}
+    if "analysis_results" not in session:
+        session["analysis_results"] = {}
+    if "schema_version" not in session:
+        session["schema_version"] = 1
 
     completed = set(session.get("phases_completed", []))
     console.print(f"[dim]Resuming session:[/dim] {session.get('session_id', '?')}")
@@ -239,7 +288,7 @@ def resume_pipeline(session_path: Path) -> None:
 
     video_paths = [info["path"] for info in session.get("videos", {}).values()]
 
-    for phase_num in range(1, 7):
+    for phase_num in range(1, TOTAL_PHASES + 1):
         phase_id = PHASE_IDS[phase_num - 1]
         if phase_id in completed:
             continue
@@ -249,6 +298,7 @@ def resume_pipeline(session_path: Path) -> None:
             session,
             session_path,
             video_paths=video_paths,
+            skip_analysis=skip_analysis,
         )
 
     show_completion_summary(session, session.get("zip_path"))
@@ -287,20 +337,23 @@ def cli() -> None:
 @click.option("--phases", "-p", default=None, help="Run specific phases (e.g. '1-3' or '2,4')")
 @click.option("--skip-questionnaire", is_flag=True, default=False, help="Skip interactive questionnaire")
 @click.option("--fps", type=int, default=None, help="Override extraction FPS (lower = fewer frames, snappier animations)")
-def run(video: tuple[str, ...], character: str, phases: str | None, skip_questionnaire: bool, fps: int | None) -> None:
+@click.option("--profile", type=click.Path(exists=True), default=None, help="Path to game profile JSON (skips profile questionnaire)")
+@click.option("--skip-analysis", is_flag=True, default=False, help="Skip frame analysis phase")
+def run(video: tuple[str, ...], character: str, phases: str | None, skip_questionnaire: bool, fps: int | None, profile: str | None, skip_analysis: bool) -> None:
     """Run the full animation extraction pipeline."""
     try:
-        run_pipeline(video, character, phases, skip_questionnaire, fps)
+        run_pipeline(video, character, phases, skip_questionnaire, fps, profile, skip_analysis)
     except Exception as e:
         show_error(str(e), exception=e)
 
 
 @cli.command()
 @click.option("--session", "-s", required=True, type=click.Path(exists=True), help="Path to session_config.json")
-def resume(session: str) -> None:
+@click.option("--skip-analysis", is_flag=True, default=False, help="Skip frame analysis phase")
+def resume(session: str, skip_analysis: bool) -> None:
     """Resume an interrupted pipeline session."""
     try:
-        resume_pipeline(Path(session))
+        resume_pipeline(Path(session), skip_analysis)
     except Exception as e:
         show_error(str(e), exception=e)
 

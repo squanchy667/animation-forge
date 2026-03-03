@@ -1,0 +1,14 @@
+{
+  "game_type": "top_down_rpg",
+  "target_resolution": {"width": 64, "height": 64, "preset": "64x64"},
+  "art_style": "pixel_art",
+  "perspective": "top_down",
+  "frame_budget": "standard",
+  "export_target": "unity",
+  "bg_method": "auto",
+  "bg_color": null,
+  "extract_fps": null,
+  "playback_fps": 10,
+  "filter_mode": "point",
+  "ppu_override": 32
+}

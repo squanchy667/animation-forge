@@ -508,11 +508,11 @@ def _pick_best_model(frames_dir: Path) -> str:
 def remove_backgrounds(session: dict) -> dict:
     """Run background removal with green screen detection, model selection, and fallback.
 
-    Pipeline per video:
-    1. Detect green screen — if found, use chroma-key removal first
-    2. Run rembg with auto-selected model (or on chroma-key output for green screen)
-    3. Fall back to numpy if rembg unavailable
-    4. Final green cleanup pass to catch residual green fringing
+    Respects game_profile.bg_method:
+    - "green_screen": skip auto-detection, go straight to chroma-key pipeline
+    - "solid_color": use specified bg_color as background mean for numpy removal
+    - "natural": skip green screen detection, rembg only
+    - "auto": current behavior (detect, then decide)
 
     Args:
         session: Session config dict.
@@ -521,6 +521,11 @@ def remove_backgrounds(session: dict) -> dict:
         Updated session dict.
     """
     output_base = Path(session["output_dir"]) / "frames" / "nobg"
+    profile = session.get("game_profile", {})
+    bg_method = profile.get("bg_method", "auto") if profile else "auto"
+
+    if bg_method != "auto":
+        console.print(f"  [dim]BG method from profile:[/dim] {bg_method}")
 
     for video_name, video_info in session["videos"].items():
         raw_dir = Path(session["output_dir"]) / "frames" / "raw" / Path(video_name).stem
@@ -529,9 +534,28 @@ def remove_backgrounds(session: dict) -> dict:
         console.print(f"\n[bold]Removing backgrounds from {video_name}...[/bold]")
 
         result = None
-        is_greenscreen = _detect_green_screen(raw_dir)
 
-        if is_greenscreen:
+        # Determine if green screen based on profile or auto-detection
+        if bg_method == "green_screen":
+            is_greenscreen = True
+            console.print("  [dim]Green screen mode (profile override)[/dim]")
+        elif bg_method == "natural":
+            is_greenscreen = False
+            console.print("  [dim]Natural mode — skipping green screen detection[/dim]")
+        elif bg_method == "solid_color":
+            is_greenscreen = False
+            console.print("  [dim]Solid color mode — using numpy with specified color[/dim]")
+        else:
+            is_greenscreen = _detect_green_screen(raw_dir)
+
+        if bg_method == "solid_color" and profile.get("bg_color"):
+            # Use specified solid color with numpy method
+            bg_color = profile["bg_color"]
+            console.print(f"  [dim]Background color:[/dim] RGB({bg_color[0]}, {bg_color[1]}, {bg_color[2]})")
+            result = remove_bg_numpy(str(raw_dir), str(video_output))
+            if result.get("success"):
+                result["method"] = "solid_color_numpy"
+        elif is_greenscreen:
             console.print("  [green]Green screen detected[/green] — using chroma-key removal")
 
             # Stage 1: Chroma-key green removal

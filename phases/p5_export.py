@@ -2,6 +2,7 @@
 
 T007: Spritesheet packing loop
 T009: Metadata JSON, import guide rendering, output package assembly
+T021: Profile-aware export (resolution resize, PPU override, Godot/generic)
 """
 
 import json
@@ -13,17 +14,22 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
 
-from utils.spritesheet import get_pivot_bottom_center, pack_spritesheet, recommended_ppu
+from utils.spritesheet import get_pivot_bottom_center, pack_spritesheet, recommended_ppu, resize_frames
 from utils.unity_export import generate_animator_controller, generate_animator_params_cs
 
 console = Console()
 
 
-# ── Spritesheet Packing (T007) ───────────────────────────────────────────────
+# ── Spritesheet Packing (T007/T021) ─────────────────────────────────────────
 
 
 def pack_all_spritesheets(session: dict) -> dict[str, dict]:
     """Pack spritesheets for all animations in the session.
+
+    Respects game_profile for:
+    - target_resolution: resize frames before packing
+    - ppu_override: use instead of auto-calculated PPU
+    - filter_mode/art_style: determines resample method
 
     Args:
         session: Session config with animation_map and nobg frame paths.
@@ -34,16 +40,34 @@ def pack_all_spritesheets(session: dict) -> dict[str, dict]:
     output_base = Path(session["output_dir"]) / "export" / "Sprites"
     character = session["character_name"]
     animation_map = session.get("animation_map", {})
+    profile = session.get("game_profile", {}) or {}
 
     if not animation_map:
         console.print("  [yellow]No animations mapped — skipping spritesheet packing[/yellow]")
         return {}
 
+    # Check if resize is needed
+    target_res = profile.get("target_resolution", {})
+    target_w = target_res.get("width")
+    target_h = target_res.get("height")
+    needs_resize = target_w and target_h and target_res.get("preset") != "original"
+
+    if needs_resize:
+        resample = None
+        if profile.get("filter_mode") == "point" or profile.get("art_style") == "pixel_art":
+            from PIL import Image
+            resample = Image.Resampling.NEAREST
+            console.print(f"  [dim]Resizing to {target_w}x{target_h} (NEAREST for pixel art)[/dim]")
+        else:
+            from PIL import Image
+            resample = Image.Resampling.LANCZOS
+            console.print(f"  [dim]Resizing to {target_w}x{target_h} (LANCZOS)[/dim]")
+
     spritesheets: dict[str, dict] = {}
 
     with Progress(
         SpinnerColumn(),
-        TextColumn("[bold cyan][Phase 6/6][/bold cyan] Spritesheet Packing"),
+        TextColumn(f"[bold cyan][Phase 8/{8}][/bold cyan] Spritesheet Packing"),
         BarColumn(bar_width=30),
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         TextColumn("[dim]{task.completed}/{task.total}[/dim]"),
@@ -53,22 +77,27 @@ def pack_all_spritesheets(session: dict) -> dict[str, dict]:
         task = progress.add_task("pack", total=len(animation_map))
 
         for anim_id, anim_info in animation_map.items():
-            video_name = anim_info["video"]
-            video_stem = Path(video_name).stem
-            nobg_dir = Path(session["output_dir"]) / "frames" / "nobg" / video_stem
-
-            # Get frames for this animation's range
-            start = anim_info["frame_start"]
-            end = anim_info["frame_end"]
-            all_frames = sorted(nobg_dir.glob("frame_*.png"))
-
-            # Slice to animation range (0-indexed in animation_map)
-            anim_frames = [str(f) for f in all_frames[start:end + 1]]
+            # Use segmented frames if available, otherwise fall back to nobg frames
+            anim_dir = Path(session["output_dir"]) / "frames" / "animations" / anim_id
+            if anim_dir.exists():
+                anim_frames = [str(f) for f in sorted(anim_dir.glob("frame_*.png"))]
+            else:
+                video_name = anim_info["video"]
+                video_stem = Path(video_name).stem
+                nobg_dir = Path(session["output_dir"]) / "frames" / "nobg" / video_stem
+                start = anim_info["frame_start"]
+                end = anim_info["frame_end"]
+                all_frames = sorted(nobg_dir.glob("frame_*.png"))
+                anim_frames = [str(f) for f in all_frames[start:end + 1]]
 
             if not anim_frames:
                 console.print(f"  [yellow]Warning:[/yellow] No frames for '{anim_id}' — skipping")
                 progress.update(task, advance=1)
                 continue
+
+            # Resize if profile specifies target resolution
+            if needs_resize:
+                resize_frames(anim_frames, target_w, target_h, resample)
 
             out_path = output_base / f"{character}_{anim_id}.png"
             meta = pack_spritesheet(anim_frames, str(out_path))
@@ -78,7 +107,13 @@ def pack_all_spritesheets(session: dict) -> dict[str, dict]:
             meta["fps"] = anim_info.get("fps", 12)
             meta["loop"] = anim_info.get("loop", False)
             meta["pivot"] = get_pivot_bottom_center(meta["frame_w"], meta["frame_h"])
-            meta["ppu"] = recommended_ppu(meta["frame_h"])
+
+            # PPU: use profile override or auto-calculate
+            ppu_override = profile.get("ppu_override")
+            if ppu_override:
+                meta["ppu"] = ppu_override
+            else:
+                meta["ppu"] = recommended_ppu(meta["frame_h"])
 
             spritesheets[anim_id] = meta
             progress.update(task, advance=1)
@@ -87,7 +122,7 @@ def pack_all_spritesheets(session: dict) -> dict[str, dict]:
     return spritesheets
 
 
-# ── Metadata + Import Guide (T009) ──────────────────────────────────────────
+# ── Metadata + Import Guide (T009/T021) ──────────────────────────────────────
 
 
 def write_metadata(session: dict, spritesheets: dict[str, dict], output_path: str) -> None:
@@ -101,16 +136,24 @@ def write_metadata(session: dict, spritesheets: dict[str, dict], output_path: st
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    profile = session.get("game_profile", {}) or {}
+
     metadata = {
         "character_name": session["character_name"],
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "generated_by": "Animation Forge v0.1.0",
+        "generated_by": "Animation Forge v0.2.0",
         "bg_removal_method": session.get("bg_removal_method", "unknown"),
+        "game_profile": {
+            "game_type": profile.get("game_type"),
+            "art_style": profile.get("art_style"),
+            "export_target": profile.get("export_target"),
+            "filter_mode": profile.get("filter_mode"),
+        } if profile else None,
         "animations": {},
     }
 
     for anim_id, sheet in spritesheets.items():
-        metadata["animations"][anim_id] = {
+        anim_meta = {
             "spritesheet": sheet["path"],
             "frame_w": sheet["frame_w"],
             "frame_h": sheet["frame_h"],
@@ -122,6 +165,12 @@ def write_metadata(session: dict, spritesheets: dict[str, dict], output_path: st
             "pivot": list(sheet["pivot"]),
             "ppu": sheet["ppu"],
         }
+        metadata["animations"][anim_id] = anim_meta
+
+    # Include analysis results if available
+    analysis = session.get("analysis_results", {})
+    if analysis:
+        metadata["analysis_results"] = analysis
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
@@ -140,6 +189,7 @@ def render_import_guide(session: dict, spritesheets: dict[str, dict], output_pat
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     character = session["character_name"]
+    profile = session.get("game_profile", {}) or {}
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     # Get representative dimensions from first spritesheet
@@ -149,13 +199,23 @@ def render_import_guide(session: dict, spritesheets: dict[str, dict], output_pat
     ppu = first_sheet.get("ppu", 64)
     default_fps = first_sheet.get("fps", 12)
 
+    # Profile-aware values
+    game_type = profile.get("game_type", "generic")
+    art_style = profile.get("art_style", "hd_sprites")
+    filter_mode = profile.get("filter_mode", "bilinear")
+    export_target = profile.get("export_target", "unity")
+
     # Build file table
     file_rows = []
     for anim_id, sheet in spritesheets.items():
         rel_path = f"Sprites/{character}_{anim_id}.png"
         file_rows.append(f"| `{rel_path}` | {anim_id} spritesheet ({sheet['n_frames']} frames) |")
-    file_rows.append(f"| `Animator/{character}_controller.json` | AnimatorController scaffold |")
-    file_rows.append(f"| `Animator/{character}AnimatorParams.cs` | C# parameter constants |")
+
+    if export_target == "unity":
+        file_rows.append(f"| `Animator/{character}_controller.json` | AnimatorController scaffold |")
+        file_rows.append(f"| `Animator/{character}AnimatorParams.cs` | C# parameter constants |")
+    elif export_target == "godot":
+        file_rows.append(f"| `{character}_sprite_frames.json` | Godot SpriteFrames metadata |")
     file_rows.append("| `metadata.json` | Machine-readable export metadata |")
     file_table = "\n".join(file_rows)
 
@@ -191,6 +251,19 @@ def render_import_guide(session: dict, spritesheets: dict[str, dict], output_pat
         ref_lines.extend(non_looping)
     animation_reference = "\n".join(ref_lines)
 
+    # Build quality analysis section
+    analysis = session.get("analysis_results", {})
+    quality_lines = []
+    if analysis:
+        quality_lines.append("### Quality Analysis")
+        for anim_id, result in analysis.items():
+            mc = result.get("motion_consistency", {})
+            tq = result.get("transparency_quality", {})
+            score = mc.get("motion_score", 0)
+            alpha = tq.get("quality_rating", "unknown")
+            quality_lines.append(f"- **{anim_id}**: motion {score:.0%}, alpha quality: {alpha}")
+    quality_analysis = "\n".join(quality_lines)
+
     # Read template
     template_path = Path(__file__).parent.parent / "templates" / "import_guide.md.tmpl"
     template = template_path.read_text(encoding="utf-8")
@@ -198,7 +271,7 @@ def render_import_guide(session: dict, spritesheets: dict[str, dict], output_pat
     # Fill placeholders
     guide = template.format(
         character_name=character,
-        version="0.1.0",
+        version="0.2.0",
         timestamp=timestamp,
         file_table=file_table,
         output_folder=f"{character}_animations",
@@ -209,13 +282,70 @@ def render_import_guide(session: dict, spritesheets: dict[str, dict], output_pat
         parameters_table=parameters_table,
         animation_reference=animation_reference,
         default_fps=default_fps,
+        game_type=game_type,
+        art_style=art_style,
+        filter_mode=filter_mode,
+        quality_analysis=quality_analysis,
     )
 
     output_path.write_text(guide, encoding="utf-8")
 
 
+def _generate_godot_metadata(
+    character: str,
+    spritesheets: dict[str, dict],
+    output_path: str,
+) -> None:
+    """Generate Godot-compatible SpriteFrames metadata JSON.
+
+    Args:
+        character: Character name.
+        spritesheets: Dict of animation_id → spritesheet metadata.
+        output_path: Path for output JSON file.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    sprite_frames = {
+        "character_name": character,
+        "type": "SpriteFrames",
+        "animations": [],
+    }
+
+    for anim_id, sheet in spritesheets.items():
+        anim = {
+            "name": anim_id,
+            "speed": float(sheet.get("fps", 12)),
+            "loop": sheet.get("loop", False),
+            "frames": [],
+        }
+        # Reference spritesheet with atlas coordinates
+        for i in range(sheet["n_frames"]):
+            col = i % sheet["cols"]
+            row = i // sheet["cols"]
+            anim["frames"].append({
+                "texture": f"Sprites/{character}_{anim_id}.png",
+                "region": {
+                    "x": col * sheet["frame_w"],
+                    "y": row * sheet["frame_h"],
+                    "w": sheet["frame_w"],
+                    "h": sheet["frame_h"],
+                },
+            })
+        sprite_frames["animations"].append(anim)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(sprite_frames, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
 def assemble_output_package(session: dict, spritesheets: dict[str, dict]) -> str:
     """Assemble the final output directory and ZIP package.
+
+    Respects game_profile.export_target:
+    - "unity": AnimatorController + C# params + spritesheets (default)
+    - "godot": SpriteFrames metadata + spritesheets
+    - "generic": spritesheets + JSON metadata only
 
     Args:
         session: Session config.
@@ -227,12 +357,12 @@ def assemble_output_package(session: dict, spritesheets: dict[str, dict]) -> str
     character = session["character_name"]
     base = Path(session["output_dir"])
     package_dir = base / f"{character}_animations"
+    profile = session.get("game_profile", {}) or {}
+    export_target = profile.get("export_target", "unity")
 
     # Create directory structure
     sprites_dir = package_dir / "Sprites"
-    animator_dir = package_dir / "Animator"
     sprites_dir.mkdir(parents=True, exist_ok=True)
-    animator_dir.mkdir(parents=True, exist_ok=True)
 
     # Copy spritesheets to package
     for anim_id, sheet in spritesheets.items():
@@ -241,14 +371,29 @@ def assemble_output_package(session: dict, spritesheets: dict[str, dict]) -> str
         if src != dst:
             shutil.copy2(str(src), str(dst))
 
-    # Generate AnimatorController + C# params
-    animations = list(spritesheets.keys())
-    generate_animator_controller(
-        character, animations, str(animator_dir / f"{character}_controller.json")
-    )
-    generate_animator_params_cs(
-        character, animations, str(animator_dir / f"{character}AnimatorParams.cs")
-    )
+    # Engine-specific exports
+    if export_target == "unity":
+        animator_dir = package_dir / "Animator"
+        animator_dir.mkdir(parents=True, exist_ok=True)
+
+        animations = list(spritesheets.keys())
+        generate_animator_controller(
+            character, animations, str(animator_dir / f"{character}_controller.json")
+        )
+        generate_animator_params_cs(
+            character, animations, str(animator_dir / f"{character}AnimatorParams.cs")
+        )
+        console.print("  [dim]Generated Unity AnimatorController + C# params[/dim]")
+
+    elif export_target == "godot":
+        _generate_godot_metadata(
+            character, spritesheets,
+            str(package_dir / f"{character}_sprite_frames.json"),
+        )
+        console.print("  [dim]Generated Godot SpriteFrames metadata[/dim]")
+
+    else:
+        console.print("  [dim]Generic export — spritesheets + metadata only[/dim]")
 
     # Write metadata
     write_metadata(session, spritesheets, str(package_dir / "metadata.json"))

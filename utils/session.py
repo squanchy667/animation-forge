@@ -14,6 +14,7 @@ from typing import Any
 def new_session(output_dir: str, character_name: str) -> dict[str, Any]:
     """Create a new session dict with UUID and timestamp."""
     return {
+        "schema_version": 2,
         "session_id": str(uuid.uuid4()),
         "character_name": character_name,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -22,6 +23,8 @@ def new_session(output_dir: str, character_name: str) -> dict[str, Any]:
         "animation_map": {},
         "output_dir": str(Path(output_dir).resolve()),
         "bg_removal_method": None,
+        "game_profile": {},
+        "analysis_results": {},
     }
 
 

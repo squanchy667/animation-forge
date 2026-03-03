@@ -76,6 +76,44 @@ def pack_spritesheet(frames: list[str], output_path: str) -> dict:
     }
 
 
+def resize_frames(
+    frames: list[str],
+    target_w: int,
+    target_h: int,
+    resample=None,
+) -> list[str]:
+    """Resize frames in-place to target dimensions.
+
+    Args:
+        frames: List of frame PNG paths.
+        target_w: Target width in pixels.
+        target_h: Target height in pixels.
+        resample: PIL resample filter (default: LANCZOS).
+
+    Returns:
+        Same list of frame paths (modified in-place).
+    """
+    if resample is None:
+        resample = Image.Resampling.LANCZOS
+
+    for frame_path in frames:
+        path = Path(frame_path)
+        if not path.exists():
+            continue
+        img = Image.open(path)
+        if img.size == (target_w, target_h):
+            img.close()
+            continue
+        resized = img.resize((target_w, target_h), resample)
+        if img.mode == "RGBA":
+            resized = resized.convert("RGBA")
+        resized.save(str(path), "PNG")
+        img.close()
+        resized.close()
+
+    return frames
+
+
 def get_pivot_bottom_center(frame_w: int, frame_h: int) -> tuple[float, float]:
     """Return Unity bottom-center pivot for ground-based characters.
 

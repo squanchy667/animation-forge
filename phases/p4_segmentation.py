@@ -9,48 +9,12 @@ import json
 import shutil
 from pathlib import Path
 
-import numpy as np
-from PIL import Image
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
+from utils.motion import frame_pose_signature
+
 console = Console()
-
-
-# ── Motion-Based Auto-Trim ───────────────────────────────────────────────────
-
-
-def _frame_pose_signature(frame_path: Path) -> tuple[float, float, float]:
-    """Extract pose signature from an RGBA frame: center-of-mass X/Y and bbox height.
-
-    AI-generated video has high per-pixel variation even in standing frames,
-    so raw pixel diffs don't work. Instead we track the character's overall
-    position and shape via the alpha channel.
-
-    Returns:
-        (center_x, center_y, bbox_height) normalized to 0.0-1.0 range.
-    """
-    img = np.array(Image.open(frame_path).convert("RGBA"), dtype=np.float32)
-    alpha = img[:, :, 3] / 255.0
-    h, w = alpha.shape
-    total = alpha.sum()
-
-    if total < 1:
-        return 0.5, 0.5, 0.0
-
-    ys = np.arange(h, dtype=np.float32).reshape(-1, 1)
-    xs = np.arange(w, dtype=np.float32).reshape(1, -1)
-    cy = float((alpha * ys).sum() / total) / h
-    cx = float((alpha * xs).sum() / total) / w
-
-    # Bounding box height
-    rows = alpha.max(axis=1)
-    visible_rows = np.where(rows > 0.1)[0]
-    if len(visible_rows) == 0:
-        return cx, cy, 0.0
-    bbox_h = float(visible_rows[-1] - visible_rows[0]) / h
-
-    return cx, cy, bbox_h
 
 
 def auto_trim_animation(
@@ -75,7 +39,7 @@ def auto_trim_animation(
         return 0, len(frames) - 1
 
     # Compute pose signature for each frame
-    signatures = [_frame_pose_signature(f) for f in frames]
+    signatures = [frame_pose_signature(f) for f in frames]
 
     # Compute pose change between consecutive frames
     # Track combined shift in center-of-mass + bbox height change
@@ -148,6 +112,7 @@ def segment_animations(session: dict) -> dict[str, list[str]]:
 
     global_auto_trim = session.get("auto_trim", True)
     anim_types = _load_animation_types()
+    profile = session.get("game_profile", {})
     output_base = Path(session["output_dir"]) / "frames" / "animations"
     segments: dict[str, list[str]] = {}
 
@@ -209,20 +174,25 @@ def segment_animations(session: dict) -> dict[str, list[str]]:
 
             segments[anim_id] = segmented
 
-            # Validate frame count against typical_frames
+            # Validate frame count against profile-aware targets
             n = len(segmented)
             anim_def = anim_types.get(anim_id)
             if anim_def and anim_def.get("typical_frames"):
-                typical_min, typical_max = anim_def["typical_frames"]
-                if n < typical_min:
+                if profile:
+                    from utils.game_profile import get_frame_target
+                    target_min, target_max = get_frame_target(profile, anim_def)
+                else:
+                    target_min, target_max = anim_def["typical_frames"]
+
+                if n < target_min:
                     console.print(
                         f"  [yellow]Warning:[/yellow] '{anim_id}' has {n} frames "
-                        f"(typical minimum: {typical_min})"
+                        f"(target minimum: {target_min})"
                     )
-                elif n > typical_max * 2:
+                elif n > target_max * 2:
                     console.print(
                         f"  [yellow]Warning:[/yellow] '{anim_id}' has {n} frames "
-                        f"(typical maximum: {typical_max}, got 2x+)"
+                        f"(target maximum: {target_max}, got 2x+)"
                     )
 
             progress.update(task, advance=1)
