@@ -1,16 +1,119 @@
-"""Phase 4 — Frame segmentation.
+"""Phase 4 — Frame segmentation with motion-based auto-trim.
 
 Slices nobg frames into per-animation directories based on animation_map.
+Then auto-trims still/idle frames from the start and end of each animation
+by comparing consecutive frames for pixel-level motion.
 """
 
 import json
 import shutil
 from pathlib import Path
 
+import numpy as np
+from PIL import Image
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 console = Console()
+
+
+# ── Motion-Based Auto-Trim ───────────────────────────────────────────────────
+
+
+def _frame_pose_signature(frame_path: Path) -> tuple[float, float, float]:
+    """Extract pose signature from an RGBA frame: center-of-mass X/Y and bbox height.
+
+    AI-generated video has high per-pixel variation even in standing frames,
+    so raw pixel diffs don't work. Instead we track the character's overall
+    position and shape via the alpha channel.
+
+    Returns:
+        (center_x, center_y, bbox_height) normalized to 0.0-1.0 range.
+    """
+    img = np.array(Image.open(frame_path).convert("RGBA"), dtype=np.float32)
+    alpha = img[:, :, 3] / 255.0
+    h, w = alpha.shape
+    total = alpha.sum()
+
+    if total < 1:
+        return 0.5, 0.5, 0.0
+
+    ys = np.arange(h, dtype=np.float32).reshape(-1, 1)
+    xs = np.arange(w, dtype=np.float32).reshape(1, -1)
+    cy = float((alpha * ys).sum() / total) / h
+    cx = float((alpha * xs).sum() / total) / w
+
+    # Bounding box height
+    rows = alpha.max(axis=1)
+    visible_rows = np.where(rows > 0.1)[0]
+    if len(visible_rows) == 0:
+        return cx, cy, 0.0
+    bbox_h = float(visible_rows[-1] - visible_rows[0]) / h
+
+    return cx, cy, bbox_h
+
+
+def auto_trim_animation(
+    frames: list[Path],
+    min_motion_frames: int = 3,
+) -> tuple[int, int]:
+    """Detect motion start and end by tracking character pose changes.
+
+    Computes center-of-mass and bounding box for each frame, then identifies
+    the transition from standing (stable pose) to action (shifting pose).
+    Works reliably with AI-generated video where per-pixel diffs are noisy.
+
+    Args:
+        frames: Sorted list of frame paths.
+        min_motion_frames: Require this many consecutive motion frames to confirm start.
+
+    Returns:
+        Tuple of (trim_start, trim_end) as 0-indexed indices into the frames list.
+        The range frames[trim_start:trim_end+1] contains the actual motion.
+    """
+    if len(frames) < min_motion_frames + 4:
+        return 0, len(frames) - 1
+
+    # Compute pose signature for each frame
+    signatures = [_frame_pose_signature(f) for f in frames]
+
+    # Compute pose change between consecutive frames
+    # Track combined shift in center-of-mass + bbox height change
+    pose_diffs = []
+    for i in range(len(signatures) - 1):
+        cx1, cy1, bh1 = signatures[i]
+        cx2, cy2, bh2 = signatures[i + 1]
+        # Weighted combination: horizontal shift matters most for walk/run,
+        # vertical shift for jump, bbox height for crouch/stand transitions
+        diff = abs(cx2 - cx1) * 2.0 + abs(cy2 - cy1) * 1.5 + abs(bh2 - bh1) * 1.0
+        pose_diffs.append(diff)
+
+    # Find threshold: use the median of all diffs as the motion baseline
+    # Standing frames have lower pose changes, action frames have higher
+    sorted_diffs = sorted(pose_diffs)
+    median_diff = sorted_diffs[len(sorted_diffs) // 2]
+
+    # Motion threshold: frames with pose change above 70% of median are "in motion"
+    # This adapts to each animation's own motion intensity
+    motion_threshold = median_diff * 0.7
+
+    # Find motion start: first sustained run above threshold
+    trim_start = 0
+    for i in range(len(pose_diffs) - min_motion_frames + 1):
+        window = pose_diffs[i:i + min_motion_frames]
+        if all(d >= motion_threshold for d in window):
+            trim_start = max(0, i - 1)
+            break
+
+    # Find motion end: last sustained run above threshold
+    trim_end = len(frames) - 1
+    for i in range(len(pose_diffs) - 1, min_motion_frames - 2, -1):
+        window = pose_diffs[max(0, i - min_motion_frames + 1):i + 1]
+        if all(d >= motion_threshold for d in window):
+            trim_end = min(len(frames) - 1, i + 2)
+            break
+
+    return trim_start, trim_end
 
 
 def _load_animation_types() -> dict[str, dict]:
@@ -22,10 +125,15 @@ def _load_animation_types() -> dict[str, dict]:
 
 
 def segment_animations(session: dict) -> dict[str, list[str]]:
-    """Slice nobg frames into per-animation buckets.
+    """Slice nobg frames into per-animation buckets with motion-based auto-trim.
 
-    For each animation in animation_map, copies the relevant frame range
-    into a dedicated directory with re-numbered filenames starting from 0001.
+    For each animation in animation_map:
+    1. Copies the relevant frame range into a dedicated directory
+    2. Runs auto-trim to detect and remove still/idle frames at start and end
+    3. Re-numbers remaining frames starting from 0001
+
+    Auto-trim can be disabled per-animation by setting "auto_trim": false
+    in the animation_map entry, or globally via session["auto_trim"] = false.
 
     Args:
         session: Session config with animation_map and nobg frame paths.
@@ -38,6 +146,7 @@ def segment_animations(session: dict) -> dict[str, list[str]]:
         console.print("  [yellow]No animations mapped — skipping segmentation[/yellow]")
         return {}
 
+    global_auto_trim = session.get("auto_trim", True)
     anim_types = _load_animation_types()
     output_base = Path(session["output_dir"]) / "frames" / "animations"
     segments: dict[str, list[str]] = {}
@@ -66,9 +175,29 @@ def segment_animations(session: dict) -> dict[str, list[str]]:
 
             # Slice to animation range (0-indexed)
             anim_frames = all_frames[frame_start:frame_end + 1]
+            original_count = len(anim_frames)
 
-            # Create output directory
+            # Auto-trim: detect and remove still frames at start/end
+            should_trim = global_auto_trim and anim_info.get("auto_trim", True)
+            if should_trim and len(anim_frames) > 6:
+                trim_start, trim_end = auto_trim_animation(anim_frames)
+                trimmed_frames = anim_frames[trim_start:trim_end + 1]
+
+                trimmed_start = trim_start
+                trimmed_end = original_count - 1 - trim_end
+
+                if trimmed_start > 0 or trimmed_end > 0:
+                    console.print(
+                        f"  [cyan]Auto-trim {anim_id}:[/cyan] "
+                        f"{original_count} → {len(trimmed_frames)} frames "
+                        f"(cut {trimmed_start} start, {trimmed_end} end)"
+                    )
+                anim_frames = trimmed_frames
+
+            # Create output directory (clean it first for re-runs)
             anim_dir = output_base / anim_id
+            if anim_dir.exists():
+                shutil.rmtree(anim_dir)
             anim_dir.mkdir(parents=True, exist_ok=True)
 
             # Copy and re-number (1-indexed, 4-digit padded)
