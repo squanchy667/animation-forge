@@ -153,6 +153,9 @@ def run_extraction(session: dict) -> dict:
     """
     output_base = Path(session["output_dir"]) / "frames" / "raw"
 
+    # Allow session-level FPS override for snappier game animations
+    extract_fps_override = session.get("extract_fps")
+
     for video_name, video_info in session["videos"].items():
         video_path = video_info["path"]
         video_output = output_base / Path(video_name).stem
@@ -169,14 +172,19 @@ def run_extraction(session: dict) -> dict:
             "height": probe["height"],
         })
 
+        # Use override fps if set, otherwise native
+        use_fps = extract_fps_override if extract_fps_override else probe["fps"]
+
         # Extract
         frame_paths = extract_frames(
             video_path=video_path,
             output_dir=str(video_output),
-            fps=probe["fps"],
+            fps=use_fps,
         )
 
         video_info["extracted_frames"] = frame_paths
         video_info["extracted_frame_count"] = len(frame_paths)
+        # Update total_frames to match actual extracted count
+        video_info["total_frames"] = len(frame_paths)
 
     return session

@@ -180,6 +180,7 @@ def run_pipeline(
     character: str,
     phases: str | None,
     skip_questionnaire: bool,
+    fps: int | None = None,
 ) -> None:
     """Orchestrate the full pipeline: P0 → P1 → P2 → P3 → P4 → P5."""
     show_banner()
@@ -189,6 +190,10 @@ def run_pipeline(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     session = new_session(str(output_dir), character)
+
+    # Set extraction FPS override if provided
+    if fps:
+        session["extract_fps"] = fps
 
     # Pre-populate videos in session
     for v in videos:
@@ -281,10 +286,11 @@ def cli() -> None:
 @click.option("--character", "-c", required=True, help="Character name (used in output naming)")
 @click.option("--phases", "-p", default=None, help="Run specific phases (e.g. '1-3' or '2,4')")
 @click.option("--skip-questionnaire", is_flag=True, default=False, help="Skip interactive questionnaire")
-def run(video: tuple[str, ...], character: str, phases: str | None, skip_questionnaire: bool) -> None:
+@click.option("--fps", type=int, default=None, help="Override extraction FPS (lower = fewer frames, snappier animations)")
+def run(video: tuple[str, ...], character: str, phases: str | None, skip_questionnaire: bool, fps: int | None) -> None:
     """Run the full animation extraction pipeline."""
     try:
-        run_pipeline(video, character, phases, skip_questionnaire)
+        run_pipeline(video, character, phases, skip_questionnaire, fps)
     except Exception as e:
         show_error(str(e), exception=e)
 
