@@ -10,5 +10,6 @@
   "extract_fps": null,
   "playback_fps": 12,
   "filter_mode": "bilinear",
-  "ppu_override": null
+  "ppu_override": null,
+  "refinement_profile": null
 }

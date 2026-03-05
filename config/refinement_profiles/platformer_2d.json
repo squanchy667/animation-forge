@@ -1,0 +1,21 @@
+{
+  "canvas": {"width": 128, "height": 256},
+  "normalize_resolution": {"width": 784, "height": 1168},
+  "fps": 12,
+  "animations": {
+    "idle":     {"target_frames": 6,  "action_start": 5,  "action_end": 55, "loop": true,  "white_kill": [30, 200], "alpha_thresh": 80, "trim_pct": 0.05},
+    "walk":     {"target_frames": 8,  "action_start": 12, "action_end": 65, "loop": true,  "white_kill": [35, 160], "alpha_thresh": 70, "trim_pct": 0.05},
+    "run":      {"target_frames": 8,  "action_start": 8,  "action_end": 60, "loop": true,  "white_kill": [35, 150], "alpha_thresh": 70, "trim_pct": 0.05},
+    "jump":     {"target_frames": 5,  "action_start": 3,  "action_end": 35, "loop": false, "white_kill": [30, 190], "alpha_thresh": 80, "trim_pct": 0.05},
+    "fall":     {"target_frames": 4,  "action_start": 3,  "action_end": 40, "loop": false, "white_kill": [35, 160], "alpha_thresh": 70, "trim_pct": 0.05},
+    "land":     {"target_frames": 4,  "action_start": 8,  "action_end": 35, "loop": false, "white_kill": [35, 170], "alpha_thresh": 75, "trim_pct": 0.05},
+    "dash":     {"target_frames": 5,  "action_start": 12, "action_end": 45, "loop": false, "white_kill": [40, 140], "alpha_thresh": 65, "trim_pct": 0.05},
+    "attack_1": {"target_frames": 6,  "action_start": 6,  "action_end": 45, "loop": false, "white_kill": [35, 160], "alpha_thresh": 70, "trim_pct": 0.05},
+    "attack_2": {"target_frames": 8,  "action_start": 5,  "action_end": 50, "loop": false, "white_kill": [30, 190], "alpha_thresh": 80, "trim_pct": 0.05},
+    "block":    {"target_frames": 4,  "action_start": 5,  "action_end": 40, "loop": false, "white_kill": [30, 200], "alpha_thresh": 80, "trim_pct": 0.05},
+    "guard":    {"target_frames": 6,  "action_start": 3,  "action_end": 40, "loop": true,  "white_kill": [30, 200], "alpha_thresh": 80, "trim_pct": 0.05},
+    "hurt":     {"target_frames": 4,  "action_start": 5,  "action_end": 35, "loop": false, "white_kill": [30, 190], "alpha_thresh": 80, "trim_pct": 0.05},
+    "death":    {"target_frames": 8,  "action_start": 15, "action_end": 50, "loop": false, "white_kill": [30, 200], "alpha_thresh": 80, "trim_pct": 0.05},
+    "kneel":    {"target_frames": 6,  "action_start": 4,  "action_end": 45, "loop": false, "white_kill": [30, 200], "alpha_thresh": 80, "trim_pct": 0.05}
+  }
+}

@@ -24,10 +24,14 @@ PHASE_NAMES = [
     "Background Removal",
     "Segmentation",
     "Frame Analysis",
+    "Game Refinement",
     "Export & Package",
 ]
 
-PHASE_IDS = ["p_profile", "p0", "p1", "p2", "p3", "p4", "p_analyze", "p5"]
+PHASE_IDS = ["p_profile", "p0", "p1", "p2", "p3", "p4", "p_analyze", "p6_refine", "p5"]
+
+# Game types that auto-activate Phase 9 refinement
+REFINEMENT_GAME_TYPES = {"2d_roguelite", "2d_platformer"}
 
 TOTAL_PHASES = len(PHASE_NAMES)
 
@@ -115,10 +119,10 @@ def _run_phase(phase_num: int, session: dict, session_path: Path, **kwargs) -> d
     """Run a single phase with error handling and retry.
 
     Args:
-        phase_num: 1-indexed phase number (1-8).
+        phase_num: 1-indexed phase number (1-9).
         session: Session config dict.
         session_path: Path to session_config.json for saving.
-        **kwargs: Extra args (video_paths, skip_questionnaire, skip_analysis).
+        **kwargs: Extra args (video_paths, skip_questionnaire, skip_analysis, skip_refinement).
 
     Returns:
         Updated session dict.
@@ -172,6 +176,19 @@ def _run_phase(phase_num: int, session: dict, session_path: Path, **kwargs) -> d
                     session = run_frame_analysis(session)
 
             elif phase_num == 8:
+                # Game Refinement — auto-activates for supported game types
+                game_type = session.get("game_profile", {}).get("game_type", "")
+                refinement_profile = session.get("game_profile", {}).get("refinement_profile")
+
+                if kwargs.get("skip_refinement"):
+                    console.print("  [dim]Skipping refinement (--skip-refinement)[/dim]")
+                elif not refinement_profile and game_type not in REFINEMENT_GAME_TYPES:
+                    console.print(f"  [dim]Refinement not configured for {game_type}, skipping[/dim]")
+                else:
+                    from phases.p6_refine import run_refinement
+                    session = run_refinement(session)
+
+            elif phase_num == 9:
                 from phases.p5_export import assemble_output_package, pack_all_spritesheets
                 spritesheets = pack_all_spritesheets(session)
                 session["spritesheets"] = {
@@ -206,8 +223,9 @@ def run_pipeline(
     fps: int | None = None,
     profile_path: str | None = None,
     skip_analysis: bool = False,
+    skip_refinement: bool = False,
 ) -> None:
-    """Orchestrate the full 8-phase pipeline."""
+    """Orchestrate the full 9-phase pipeline."""
     show_banner()
 
     # Create output directory and session
@@ -261,6 +279,7 @@ def run_pipeline(
             video_paths=[str(Path(v).resolve()) for v in videos],
             skip_questionnaire=skip_questionnaire,
             skip_analysis=skip_analysis,
+            skip_refinement=skip_refinement,
         )
 
     show_completion_summary(session, session.get("zip_path"))
@@ -339,10 +358,11 @@ def cli() -> None:
 @click.option("--fps", type=int, default=None, help="Override extraction FPS (lower = fewer frames, snappier animations)")
 @click.option("--profile", type=click.Path(exists=True), default=None, help="Path to game profile JSON (skips profile questionnaire)")
 @click.option("--skip-analysis", is_flag=True, default=False, help="Skip frame analysis phase")
-def run(video: tuple[str, ...], character: str, phases: str | None, skip_questionnaire: bool, fps: int | None, profile: str | None, skip_analysis: bool) -> None:
+@click.option("--skip-refinement", is_flag=True, default=False, help="Skip game refinement phase (Phase 9)")
+def run(video: tuple[str, ...], character: str, phases: str | None, skip_questionnaire: bool, fps: int | None, profile: str | None, skip_analysis: bool, skip_refinement: bool) -> None:
     """Run the full animation extraction pipeline."""
     try:
-        run_pipeline(video, character, phases, skip_questionnaire, fps, profile, skip_analysis)
+        run_pipeline(video, character, phases, skip_questionnaire, fps, profile, skip_analysis, skip_refinement)
     except Exception as e:
         show_error(str(e), exception=e)
 

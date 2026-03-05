@@ -10,5 +10,6 @@
   "extract_fps": null,
   "playback_fps": 10,
   "filter_mode": "point",
-  "ppu_override": 32
+  "ppu_override": 32,
+  "refinement_profile": null
 }

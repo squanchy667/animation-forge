@@ -26,8 +26,11 @@ console = Console()
 def pack_all_spritesheets(session: dict) -> dict[str, dict]:
     """Pack spritesheets for all animations in the session.
 
+    Checks for refined frames first (from Phase 8 Game Refinement).
+    Falls back to segmented frames, then nobg frames.
+
     Respects game_profile for:
-    - target_resolution: resize frames before packing
+    - target_resolution: resize frames before packing (skipped if refined)
     - ppu_override: use instead of auto-calculated PPU
     - filter_mode/art_style: determines resample method
 
@@ -40,17 +43,22 @@ def pack_all_spritesheets(session: dict) -> dict[str, dict]:
     output_base = Path(session["output_dir"]) / "export" / "Sprites"
     character = session["character_name"]
     animation_map = session.get("animation_map", {})
+    refined_frames = session.get("refined_frames", {})
     profile = session.get("game_profile", {}) or {}
 
     if not animation_map:
         console.print("  [yellow]No animations mapped — skipping spritesheet packing[/yellow]")
         return {}
 
-    # Check if resize is needed
+    use_refined = bool(refined_frames)
+    if use_refined:
+        console.print(f"  [dim]Using refined frames ({len(refined_frames)} animations)[/dim]")
+
+    # Check if resize is needed (skip for refined frames — already sized)
     target_res = profile.get("target_resolution", {})
     target_w = target_res.get("width")
     target_h = target_res.get("height")
-    needs_resize = target_w and target_h and target_res.get("preset") != "original"
+    needs_resize = (not use_refined) and target_w and target_h and target_res.get("preset") != "original"
 
     if needs_resize:
         resample = None
@@ -63,39 +71,49 @@ def pack_all_spritesheets(session: dict) -> dict[str, dict]:
             resample = Image.Resampling.LANCZOS
             console.print(f"  [dim]Resizing to {target_w}x{target_h} (LANCZOS)[/dim]")
 
+    # Determine which animation IDs to pack
+    anim_ids = list(refined_frames.keys()) if use_refined else list(animation_map.keys())
+
     spritesheets: dict[str, dict] = {}
 
     with Progress(
         SpinnerColumn(),
-        TextColumn(f"[bold cyan][Phase 8/{8}][/bold cyan] Spritesheet Packing"),
+        TextColumn("[bold cyan][Phase 9][/bold cyan] Spritesheet Packing"),
         BarColumn(bar_width=30),
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         TextColumn("[dim]{task.completed}/{task.total}[/dim]"),
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("pack", total=len(animation_map))
+        task = progress.add_task("pack", total=len(anim_ids))
 
-        for anim_id, anim_info in animation_map.items():
-            # Use segmented frames if available, otherwise fall back to nobg frames
-            anim_dir = Path(session["output_dir"]) / "frames" / "animations" / anim_id
-            if anim_dir.exists():
-                anim_frames = [str(f) for f in sorted(anim_dir.glob("frame_*.png"))]
+        for anim_id in anim_ids:
+            anim_info = animation_map.get(anim_id, {})
+
+            if use_refined and anim_id in refined_frames:
+                # Use refined frames directory
+                refined_dir = Path(refined_frames[anim_id]["frames_dir"])
+                anim_frames = [str(f) for f in sorted(refined_dir.glob("frame_*.png"))]
             else:
-                video_name = anim_info["video"]
-                video_stem = Path(video_name).stem
-                nobg_dir = Path(session["output_dir"]) / "frames" / "nobg" / video_stem
-                start = anim_info["frame_start"]
-                end = anim_info["frame_end"]
-                all_frames = sorted(nobg_dir.glob("frame_*.png"))
-                anim_frames = [str(f) for f in all_frames[start:end + 1]]
+                # Fallback: segmented frames, then nobg frames
+                anim_dir = Path(session["output_dir"]) / "frames" / "animations" / anim_id
+                if anim_dir.exists():
+                    anim_frames = [str(f) for f in sorted(anim_dir.glob("frame_*.png"))]
+                else:
+                    video_name = anim_info.get("video", "")
+                    video_stem = Path(video_name).stem
+                    nobg_dir = Path(session["output_dir"]) / "frames" / "nobg" / video_stem
+                    start = anim_info.get("frame_start", 0)
+                    end = anim_info.get("frame_end", 0)
+                    all_frames = sorted(nobg_dir.glob("frame_*.png"))
+                    anim_frames = [str(f) for f in all_frames[start:end + 1]]
 
             if not anim_frames:
                 console.print(f"  [yellow]Warning:[/yellow] No frames for '{anim_id}' — skipping")
                 progress.update(task, advance=1)
                 continue
 
-            # Resize if profile specifies target resolution
+            # Resize if profile specifies target resolution (skip for refined)
             if needs_resize:
                 resize_frames(anim_frames, target_w, target_h, resample)
 
@@ -104,8 +122,16 @@ def pack_all_spritesheets(session: dict) -> dict[str, dict]:
 
             # Enrich metadata
             meta["animation_id"] = anim_id
-            meta["fps"] = anim_info.get("fps", 12)
-            meta["loop"] = anim_info.get("loop", False)
+
+            if use_refined and anim_id in refined_frames:
+                # Use refinement metadata (more accurate than animation_map)
+                ref = refined_frames[anim_id]
+                meta["fps"] = session.get("game_profile", {}).get("playback_fps", 12)
+                meta["loop"] = ref.get("loop", False)
+            else:
+                meta["fps"] = anim_info.get("fps", 12)
+                meta["loop"] = anim_info.get("loop", False)
+
             meta["pivot"] = get_pivot_bottom_center(meta["frame_w"], meta["frame_h"])
 
             # PPU: use profile override or auto-calculate
